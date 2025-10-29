@@ -1,0 +1,31 @@
+# Example Pod spec
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mssql-mcp
+spec:
+  containers:
+  - name: mssql-mcp
+    image: mssql-mcp:latest
+    env:
+    - name: MSSQL_CONNECTION_STRING
+      valueFrom:
+        secretKeyRef:
+          name: mssql-credentials
+          key: connection-string
+    - name: MCP_TRANSPORT
+      value: "http"
+    - name: HTTP_BIND_HOST
+      value: "0.0.0.0"
+    ports:
+    - containerPort: 8080
+    livenessProbe:
+      httpGet:
+        path: /health
+        port: 8080
+      initialDelaySeconds: 10
+    readinessProbe:
+      httpGet:
+        path: /ready
+        port: 8080
+      initialDelaySeconds: 5
