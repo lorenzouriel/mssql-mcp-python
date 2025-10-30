@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
-    { name = "Anthropic", email = "claude@anthropic.com" }
+    { name = "Lorenzo", email = "lorenzouriel394@gmail.com" }
 ]
 keywords = [
     "mcp",
@@ -69,9 +69,9 @@ monitoring = [
 mssql-mcp = "mssql_mcp.cli:run"
 
 [project.urls]
-Homepage = "https://github.com/anthropics/mssql-mcp-python"
-Repository = "https://github.com/anthropics/mssql-mcp-python.git"
-"Bug Tracker" = "https://github.com/anthropics/mssql-mcp-python/issues"
+Homepage = "https://github.com/lorenzouriel/mssql-mcp-python"
+Repository = "https://github.com/lorenzouriel/mssql-mcp-python.git"
+"Bug Tracker" = "https://github.com/lorenzouriel/mssql-mcp-python/issues"
 
 [tool.setuptools]
 packages = ["mssql_mcp"]
