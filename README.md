@@ -1,25 +1,7 @@
-# MSSQL MCP Python Server - Quick Start & Validation
+# MSSQL MCP Python Server
 This is a complete, production-ready MCP (Model Context Protocol) server implementation in Python that safely exposes SQL Server database capabilities to LLM clients like Claude.
 
-## What Was Created
-```bash
-src/mssql_mcp/
-├── __init__.py              # Package initialization
-├── __main__.py              # python -m mssql_mcp entry
-├── cli.py                   # Command-line interface
-├── config.py                # Configuration & settings
-├── db.py                    # Database layer
-├── health.py                # Health checks
-├── logging_config.py        # Structured logging
-├── metrics.py               # Prometheus metrics
-├── policy.py                # Security policies
-├── server.py                # MCP server bootstrap
-├── tools.py                 # MCP tool implementations
-└── utils.py                 # Utilities & formatting
-```
-
 ## Quick Start
-
 ### 1. Install Dependencies
 ```bash
 cd mssql-mcp-python
@@ -41,20 +23,22 @@ export MSSQL_CONNECTION_STRING="Driver={ODBC Driver 17 for SQL Server};Server=lo
 ```
 
 ### 3. Run the Server
-
 ```bash
 # With stdio transport (for MCP clients)
 python -m mssql_mcp.cli
 
+# With custom settings
+MSSQL_QUERY_TIMEOUT=60 READ_ONLY=true python -m mssql_mcp.cli --log-level DEBUG
+
 # Or with HTTP transport
 python -m mssql_mcp.cli --transport http --bind 0.0.0.0:8080
 
-# With custom settings
-MSSQL_QUERY_TIMEOUT=60 READ_ONLY=true python -m mssql_mcp.cli --log-level DEBUG
+# Build and run
+docker build -t mssql-mcp:latest .
+docker run -e MSSQL_CONNECTION_STRING="..." mssql-mcp:latest
 ```
 
 ### 4. Test with curl (HTTP mode)
-
 ```bash
 # Health check
 curl http://localhost:8080/health
@@ -69,12 +53,8 @@ curl http://localhost:8080/info
 curl http://localhost:8080/metrics
 ```
 
----
-
 ## 🔧 Configuration Reference
-
 All settings can be set via environment variables or `.env` file:
-
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `MSSQL_CONNECTION_STRING` | — | **Required** database connection string |
@@ -94,10 +74,7 @@ All settings can be set via environment variables or `.env` file:
 | `ENABLE_HEALTH_CHECKS` | `true` | Enable health endpoints |
 | `SENTRY_DSN` | — | Optional Sentry error tracking |
 
----
-
 ## 📋 Available MCP Tools
-
 The server exposes these tools to MCP clients:
 
 ### 1. `execute_sql(sql, format="table")`
@@ -149,10 +126,7 @@ Input: (none)
 Output: Connection status
 ```
 
----
-
 ## 🔐 Security Features
-
 ✅ **Read-Only by Default**
 - Only SELECT queries allowed unless explicitly enabled
 - Writes require `ENABLE_WRITES=true` + `ADMIN_CONFIRM` token
@@ -178,10 +152,7 @@ Output: Connection status
 - Query metrics and statistics
 - Client ID tracking (when provided)
 
----
-
 ## 📊 Observability
-
 ### Prometheus Metrics
 Available at `GET /metrics` (HTTP mode):
 - `mssql_queries_executed_total` — Total queries by tool and status
@@ -211,9 +182,8 @@ All logs in JSON format (when `LOG_FORMAT=json`):
 
 
 ## 🧪 Testing (Ready for Implementation)
-
 Structure prepared for tests:
-```
+```bash
 tests/
 ├── unit/
 │   ├── test_policy.py       # Policy engine tests
@@ -230,69 +200,8 @@ Run with:
 pytest tests/ -v --cov=src/mssql_mcp
 ```
 
-## 🐳 Docker (Ready for Implementation)
-
-Prepared for containerization:
-```dockerfile
-# Dockerfile
-FROM python:3.11-slim
-RUN apt-get install -y unixodbc
-COPY src /app/src
-RUN pip install -e /app
-CMD ["python", "-m", "mssql_mcp.cli"]
-```
-
-Build & run:
-```bash
-docker build -t mssql-mcp:latest .
-docker run -e MSSQL_CONNECTION_STRING="..." mssql-mcp:latest
-```
-
----
-
-## 🚢 Kubernetes (Ready for Implementation)
-
-Prepared for K8s deployment:
-```yaml
-# Example Pod spec
-apiVersion: v1
-kind: Pod
-metadata:
-  name: mssql-mcp
-spec:
-  containers:
-  - name: mssql-mcp
-    image: mssql-mcp:latest
-    env:
-    - name: MSSQL_CONNECTION_STRING
-      valueFrom:
-        secretKeyRef:
-          name: mssql-credentials
-          key: connection-string
-    - name: MCP_TRANSPORT
-      value: "http"
-    - name: HTTP_BIND_HOST
-      value: "0.0.0.0"
-    ports:
-    - containerPort: 8080
-    livenessProbe:
-      httpGet:
-        path: /health
-        port: 8080
-      initialDelaySeconds: 10
-    readinessProbe:
-      httpGet:
-        path: /ready
-        port: 8080
-      initialDelaySeconds: 5
-```
-
----
-
 ## 📝 Code Quality
-
 The codebase includes:
-
 ✅ **Type Hints** — Full type annotations for mypy
 ✅ **Docstrings** — Comprehensive module and function documentation
 ✅ **Error Handling** — Custom exceptions and graceful error recovery
@@ -302,23 +211,23 @@ The codebase includes:
 ✅ **Metrics** — Observable performance and health
 ✅ **Configuration** — Flexible, environment-driven setup
 
----
-
 ## 🔗 Integration with Claude
-
 Use the MCP server to give Claude database access:
-
-**Claude Desktop Config** (`~/.config/Claude/claude_desktop_config.json`):
+- **Windows** (`%APPDATA%\Claude\claude_desktop_config.json`):
+- **macOS**: (`~/Library/Application Support/Claude/claude_desktop_config.json`)
 ```json
 {
   "mcpServers": {
     "mssql": {
-      "command": "python",
-      "args": ["-m", "mssql_mcp.cli"],
-      "env": {
-        "MSSQL_CONNECTION_STRING": "Driver={...};Server=...;Database=...;...",
-        "READ_ONLY": "true"
-      }
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "-e",
+        "MSSQL_CONNECTION_STRING=DRIVER={ODBC Driver 17 for SQL Server};Server=..;Database=fin_pulse;UID=mcp_readonly;PWD=mcp_readonly;TrustServerCertificate=yes;",
+        "mssql-mcp:latest"
+      ]
     }
   }
 }
@@ -329,21 +238,6 @@ Then Claude can:
 - Explore schemas with `list_tables`, `schema_discovery`
 - Analyze data and generate insights
 - All with safety guardrails in place!
-
----
-
-## 📚 Module Dependencies
-
-```
-mcp                   # Model Context Protocol SDK
-pyodbc               # SQL Server ODBC driver
-pydantic             # Configuration validation
-fastapi + uvicorn    # HTTP server (optional)
-prometheus_client    # Metrics export
-python-json-logger   # Structured logging
-```
-
----
 
 ## 🛠️ Common Tasks
 
@@ -367,24 +261,3 @@ MSSQL_QUERY_TIMEOUT=120 python -m mssql_mcp.cli
 python -m mssql_mcp.cli --transport http --bind 127.0.0.1:8080
 python -m mssql_mcp.cli --transport http --bind 127.0.0.1:8081  # Different port
 ```
-
----
-
-## 📈 Next Steps
-
-1. ✅ **src/** — Complete and ready
-2. 🔄 **tests/** — Unit and integration tests
-3. 🐳 **docker/** — Dockerfile and docker-compose
-4. 🔄 **.github/workflows/** — CI/CD pipeline
-5. 🔄 **helm/** — Kubernetes Helm chart
-6. 🔄 **docs/** — Full API documentation
-
----
-
-## 💡 Tips
-
-- **Local Development**: Use docker-compose with SQL Server image
-- **Production**: Use environment variables or Vault for secrets
-- **Monitoring**: Scrape `/metrics` with Prometheus
-- **Debugging**: Set `LOG_LEVEL=DEBUG` for verbose output
-- **Security**: Always keep `READ_ONLY=true` in untrusted environments

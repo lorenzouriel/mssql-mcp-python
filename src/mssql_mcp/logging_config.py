@@ -90,7 +90,8 @@ def setup_logging() -> None:
         root_logger.removeHandler(handler)
 
     # Create console handler
-    console_handler = logging.StreamHandler(sys.stdout)
+    # IMPORTANT: Use stderr for logs to keep stdout clean for MCP JSON-RPC messages
+    console_handler = logging.StreamHandler(sys.stderr)
     console_handler.setLevel(log_level)
 
     # Add sensitive data filter

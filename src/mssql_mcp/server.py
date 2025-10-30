@@ -63,16 +63,8 @@ class MSSQLMCPServer:
         self.logger.info("Starting MCP server with stdio transport")
 
         # The tools_mcp from tools.py is a FastMCP instance
-        # It handles stdio transport automatically
-        import sys
-        from mcp.server.stdio import stdio_server
-
-        # Create transport handler
-        async with stdio_server(tools_mcp.server) as streams:
-            await tools_mcp.server.run(
-                sys.stdin.buffer,
-                sys.stdout.buffer,
-            )
+        # Use run_stdio_async() since we're already in an async context
+        await tools_mcp.run_stdio_async()
 
     async def _run_http(self) -> None:
         """Run server with HTTP transport."""
