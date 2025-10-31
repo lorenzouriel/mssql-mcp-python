@@ -133,8 +133,8 @@ async def list_tables(schema: Optional[str] = None, limit: int = 200) -> str:
         try:
             if schema:
                 # Validate schema name to prevent injection
-                from .utils import escape_sql_identifier
-                schema_filter = f"AND s.name = {escape_sql_identifier(schema)}"
+                from .utils import escape_sql_string
+                schema_filter = f"AND s.name = {escape_sql_string(schema)}"
             else:
                 schema_filter = ""
 
@@ -183,8 +183,8 @@ async def schema_discovery(schema: Optional[str] = None) -> str:
     with MetricsContext(tool_name) as metrics:
         try:
             if schema:
-                from .utils import escape_sql_identifier
-                schema_filter = f"WHERE s.name = {escape_sql_identifier(schema)}"
+                from .utils import escape_sql_string
+                schema_filter = f"WHERE s.name = {escape_sql_string(schema)}"
             else:
                 schema_filter = ""
 

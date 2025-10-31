@@ -14,8 +14,8 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     # Database connection
-    MSSQL_CONNECTION_STRING: str = "Driver={ODBC Driver 17 for SQL Server};Server=10.0.0.107,14330;Database=fin_pulse;UID=mcp_readonly;PWD=mcp_readonly" 
-    MSSQL_CONNECTION_TIMEOUT: int = 5  # seconds
+    MSSQL_CONNECTION_STRING: str 
+    MSSQL_CONNECTION_TIMEOUT: int = 30  # seconds
     MSSQL_QUERY_TIMEOUT: int = 30  # seconds
     MSSQL_MAX_POOL_SIZE: int = 10
 
