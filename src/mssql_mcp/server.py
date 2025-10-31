@@ -75,68 +75,47 @@ class MSSQLMCPServer:
         )
 
         try:
-            from fastapi import FastAPI
-            from fastapi.responses import Response, JSONResponse
-            import uvicorn
+            from starlette.responses import Response, JSONResponse
+            from starlette.requests import Request
 
-            app = FastAPI(
-                title="MSSQL MCP Server",
-                version="0.1.0",
-                description="MCP server for SQL Server database access",
-            )
+            # Configure FastMCP with the desired host and port
+            tools_mcp.settings.host = settings.HTTP_BIND_HOST
+            tools_mcp.settings.port = settings.HTTP_BIND_PORT
 
-            # Register health endpoints
-            @app.get("/health")
-            async def health():
+            # Register custom health and metrics endpoints on the FastMCP app
+            # These will be available alongside the MCP protocol endpoint
+            @tools_mcp.custom_route("/health", methods=["GET"])
+            async def health_endpoint(request: Request) -> Response:
                 """Liveness probe."""
                 result = await health_check()
                 return JSONResponse(result)
 
-            @app.get("/ready")
-            async def ready():
+            @tools_mcp.custom_route("/ready", methods=["GET"])
+            async def ready_endpoint(request: Request) -> Response:
                 """Readiness probe."""
                 result = await readiness_check()
                 status_code = 200 if result["status"] == "ready" else 503
                 return JSONResponse(result, status_code=status_code)
 
-            @app.get("/info")
-            async def info():
+            @tools_mcp.custom_route("/info", methods=["GET"])
+            async def info_endpoint(request: Request) -> Response:
                 """Server information."""
                 result = await get_server_info()
                 return JSONResponse(result)
 
-            @app.get("/metrics")
-            async def metrics():
+            @tools_mcp.custom_route("/metrics", methods=["GET"])
+            async def metrics_endpoint(request: Request) -> Response:
                 """Prometheus metrics."""
                 metrics_text = await get_metrics_endpoint()
                 return Response(metrics_text, media_type="text/plain")
 
-            # MCP-specific endpoints (if using HTTP transport)
-            @app.post("/mcp/invoke")
-            async def invoke_mcp(request: dict):
-                """Invoke MCP tool (HTTP transport)."""
-                tool_name = request.get("tool")
-                arguments = request.get("arguments", {})
+            # Use FastMCP's built-in HTTP transport runner
+            # This starts uvicorn with the Starlette app
+            # MCP protocol is available at http://host:port/mcp
+            await tools_mcp.run_streamable_http_async()
 
-                # This would delegate to tools_mcp
-                try:
-                    # Placeholder - actual implementation depends on FastMCP HTTP support
-                    return JSONResponse({"error": "HTTP transport tool invocation not yet implemented"}, status_code=501)
-                except Exception as e:
-                    return JSONResponse({"error": str(e)}, status_code=500)
-
-            # Run Uvicorn server
-            config = uvicorn.Config(
-                app=app,
-                host=settings.HTTP_BIND_HOST,
-                port=settings.HTTP_BIND_PORT,
-                log_level=settings.LOG_LEVEL.lower(),
-            )
-            server = uvicorn.Server(config)
-            await server.serve()
-
-        except ImportError:
-            self.logger.error("FastAPI and uvicorn required for HTTP transport")
+        except ImportError as e:
+            self.logger.error("Required dependencies not installed: %s", e)
             raise
 
 

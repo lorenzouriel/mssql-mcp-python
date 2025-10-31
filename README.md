@@ -1,5 +1,5 @@
 # MSSQL MCP Python Server
-This is a complete, production-ready MCP (Model Context Protocol) server implementation in Python that safely exposes SQL Server database capabilities to LLM clients like Claude.
+This is a MCP (Model Context Protocol) server implementation in Python that safely exposes SQL Server database capabilities to LLM clients.
 
 ## Quick Start
 ### 1. Install Dependencies
@@ -12,7 +12,6 @@ pip install -e ".[dev]"
 ```
 
 ### 2. Configure Database
-
 Create `.env` file:
 ```bash
 # For local SQL Server (Linux/Docker)
@@ -53,28 +52,7 @@ curl http://localhost:8080/info
 curl http://localhost:8080/metrics
 ```
 
-## 🔧 Configuration Reference
-All settings can be set via environment variables or `.env` file:
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `MSSQL_CONNECTION_STRING` | — | **Required** database connection string |
-| `MSSQL_CONNECTION_TIMEOUT` | 5s | Connection establishment timeout |
-| `MSSQL_QUERY_TIMEOUT` | 30s | Query execution timeout |
-| `MSSQL_MAX_POOL_SIZE` | 10 | Connection pool size |
-| `READ_ONLY` | `true` | Enforce read-only mode |
-| `ENABLE_WRITES` | `false` | Allow write/DDL operations |
-| `MAX_ROWS_PER_QUERY` | 50,000 | Maximum rows to return |
-| `MAX_QUERY_LENGTH` | 50,000 | Maximum query size (chars) |
-| `MCP_TRANSPORT` | `stdio` | Transport: `stdio` or `http` |
-| `HTTP_BIND_HOST` | `127.0.0.1` | HTTP bind address |
-| `HTTP_BIND_PORT` | 8080 | HTTP port |
-| `LOG_LEVEL` | `INFO` | Logging level |
-| `LOG_FORMAT` | `json` | Log format: `json` or `text` |
-| `ENABLE_METRICS` | `true` | Enable Prometheus metrics |
-| `ENABLE_HEALTH_CHECKS` | `true` | Enable health endpoints |
-| `SENTRY_DSN` | — | Optional Sentry error tracking |
-
-## 📋 Available MCP Tools
+## Available MCP Tools
 The server exposes these tools to MCP clients:
 
 ### 1. `execute_sql(sql, format="table")`
@@ -126,7 +104,7 @@ Input: (none)
 Output: Connection status
 ```
 
-## 🔐 Security Features
+## Security Features
 ✅ **Read-Only by Default**
 - Only SELECT queries allowed unless explicitly enabled
 - Writes require `ENABLE_WRITES=true` + `ADMIN_CONFIRM` token
@@ -152,7 +130,7 @@ Output: Connection status
 - Query metrics and statistics
 - Client ID tracking (when provided)
 
-## 📊 Observability
+## Observability
 ### Prometheus Metrics
 Available at `GET /metrics` (HTTP mode):
 - `mssql_queries_executed_total` — Total queries by tool and status
@@ -180,67 +158,7 @@ All logs in JSON format (when `LOG_FORMAT=json`):
 - `GET /health` — Liveness probe (always 200)
 - `GET /ready` — Readiness probe (200 if DB connected)
 
-
-## 🧪 Testing (Ready for Implementation)
-Structure prepared for tests:
-```bash
-tests/
-├── unit/
-│   ├── test_policy.py       # Policy engine tests
-│   ├── test_config.py       # Configuration tests
-│   ├── test_utils.py        # Utility function tests
-│   └── test_db.py           # Database layer tests
-└── integration/
-    ├── test_tools.py        # MCP tool integration tests
-    └── test_health.py       # Health endpoint tests
-```
-
-Run with:
-```bash
-pytest tests/ -v --cov=src/mssql_mcp
-```
-
-## 📝 Code Quality
-The codebase includes:
-✅ **Type Hints** — Full type annotations for mypy
-✅ **Docstrings** — Comprehensive module and function documentation
-✅ **Error Handling** — Custom exceptions and graceful error recovery
-✅ **Logging** — Structured logging at appropriate levels
-✅ **Validation** — Input validation and policy checks
-✅ **Security** — Built-in security best practices
-✅ **Metrics** — Observable performance and health
-✅ **Configuration** — Flexible, environment-driven setup
-
-## 🔗 Integration with Claude
-Use the MCP server to give Claude database access:
-- **Windows** (`%APPDATA%\Claude\claude_desktop_config.json`):
-- **macOS**: (`~/Library/Application Support/Claude/claude_desktop_config.json`)
-```json
-{
-  "mcpServers": {
-    "mssql": {
-      "command": "docker",
-      "args": [
-        "run",
-        "-i",
-        "--rm",
-        "-e",
-        "MSSQL_CONNECTION_STRING=DRIVER={ODBC Driver 17 for SQL Server};Server=..;Database=fin_pulse;UID=mcp_readonly;PWD=mcp_readonly;TrustServerCertificate=yes;",
-        "mssql-mcp:latest"
-      ]
-    }
-  }
-}
-```
-
-Then Claude can:
-- Query databases with `execute_sql`
-- Explore schemas with `list_tables`, `schema_discovery`
-- Analyze data and generate insights
-- All with safety guardrails in place!
-
-## 🛠️ Common Tasks
-
+## Common Tasks
 ### Change Log Level
 ```bash
 LOG_LEVEL=DEBUG python -m mssql_mcp.cli
