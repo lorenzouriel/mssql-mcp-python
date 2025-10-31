@@ -181,24 +181,52 @@ All logs in JSON format (when `LOG_FORMAT=json`):
 - `GET /ready` — Readiness probe (200 if DB connected)
 
 
-## 🧪 Testing (Ready for Implementation)
-Structure prepared for tests:
+## 🧪 Testing
+Comprehensive test suite with unit and integration tests:
 ```bash
 tests/
 ├── unit/
 │   ├── test_policy.py       # Policy engine tests
 │   ├── test_config.py       # Configuration tests
 │   ├── test_utils.py        # Utility function tests
-│   └── test_db.py           # Database layer tests
-└── integration/
-    ├── test_tools.py        # MCP tool integration tests
-    └── test_health.py       # Health endpoint tests
+│   └── test_db.py           # Database layer tests (mocked)
+├── integration/
+│   ├── test_tools.py        # MCP tool integration tests
+│   └── test_health.py       # Health endpoint tests
+├── conftest.py              # Shared fixtures and configuration
+└── README.md                # Detailed test documentation
 ```
 
-Run with:
+### Run Tests
 ```bash
-pytest tests/ -v --cov=src/mssql_mcp
+# Run all tests
+pytest
+
+# Run unit tests only
+pytest tests/unit/ -v
+
+# Run integration tests only
+pytest tests/integration/ -v
+
+# Run with coverage report
+pytest --cov=src/mssql_mcp --cov-report=html --cov-report=term-missing
+
+# Run specific test file
+pytest tests/unit/test_policy.py -v
+
+# Run specific test
+pytest tests/unit/test_policy.py::TestReadOnlyMode::test_allow_select_queries
 ```
+
+### Test Coverage
+- **Policy Engine**: SQL validation, security policies, query mode detection
+- **Configuration**: Settings loading, validation, environment variables
+- **Utilities**: Formatting (table/JSON/CSV), pagination, SQL escaping
+- **Database Layer**: Connection handling, query execution, error handling
+- **MCP Tools**: Tool execution, policy integration, result formatting
+- **Health Endpoints**: Liveness, readiness, metrics, server info
+
+See [tests/README.md](tests/README.md) for detailed documentation.
 
 ## 📝 Code Quality
 The codebase includes:

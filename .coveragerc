@@ -1,0 +1,44 @@
+[run]
+# Coverage configuration
+
+source = src/mssql_mcp
+omit =
+    */tests/*
+    */test_*.py
+    */__pycache__/*
+    */site-packages/*
+    */venv/*
+    */.venv/*
+
+[report]
+# Reporting options
+precision = 2
+show_missing = True
+skip_covered = False
+
+exclude_lines =
+    # Standard pragma
+    pragma: no cover
+
+    # Debug-only code
+    def __repr__
+
+    # Abstract methods
+    raise NotImplementedError
+
+    # Defensive programming
+    raise AssertionError
+    raise NotImplementedError
+
+    # Type checking
+    if TYPE_CHECKING:
+    if typing.TYPE_CHECKING:
+
+    # Main blocks
+    if __name__ == .__main__.:
+
+[html]
+directory = htmlcov
+
+[xml]
+output = coverage.xml
