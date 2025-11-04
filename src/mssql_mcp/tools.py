@@ -11,7 +11,7 @@ from typing import Optional, Any
 
 from mcp.server.fastmcp import FastMCP
 
-from .db import execute_query, execute_schema_query, get_database_info, check_connection, DatabaseError
+from .db import execute_query, execute_schema_query, get_database_info as fetch_database_info, check_connection, DatabaseError
 from .policy import validate_with_audit, QueryMode, get_query_mode, explain_policy
 from .metrics import MetricsContext, record_query_blocked
 from .utils import format_table, format_json, result_summary
@@ -198,13 +198,15 @@ async def schema_discovery(schema: Optional[str] = None) -> str:
                 c.precision,
                 c.scale,
                 c.is_nullable,
-                CASE WHEN c.column_id IS NOT NULL THEN 1 ELSE 0 END as has_default
+                CASE WHEN c.column_id IS NOT NULL THEN 1 ELSE 0 END as has_default,
+				ep.value as table_description
             FROM sys.schemas s
             INNER JOIN sys.tables t ON s.schema_id = t.schema_id
             INNER JOIN sys.columns c ON t.object_id = c.object_id
             INNER JOIN sys.types ty ON c.user_type_id = ty.user_type_id
+			LEFT JOIN sys.extended_properties ep ON ep.major_id = c.object_id AND ep.minor_id = c.column_id
             {schema_filter}
-            ORDER BY s.name, t.name, c.column_id
+            ORDER BY schema_name, table_name, column_name
             """
 
             columns, rows = await execute_schema_query(sql, timeout=60)
@@ -235,7 +237,7 @@ async def get_database_info() -> str:
 
     with MetricsContext(tool_name) as metrics:
         try:
-            info = await get_database_info()
+            info = await fetch_database_info()
             metrics.set_rows(1)
 
             from .utils import format_json
