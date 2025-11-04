@@ -198,13 +198,15 @@ async def schema_discovery(schema: Optional[str] = None) -> str:
                 c.precision,
                 c.scale,
                 c.is_nullable,
-                CASE WHEN c.column_id IS NOT NULL THEN 1 ELSE 0 END as has_default
+                CASE WHEN c.column_id IS NOT NULL THEN 1 ELSE 0 END as has_default,
+				ep.value as table_description
             FROM sys.schemas s
             INNER JOIN sys.tables t ON s.schema_id = t.schema_id
             INNER JOIN sys.columns c ON t.object_id = c.object_id
             INNER JOIN sys.types ty ON c.user_type_id = ty.user_type_id
+			LEFT JOIN sys.extended_properties ep ON ep.major_id = c.object_id AND ep.minor_id = c.column_id
             {schema_filter}
-            ORDER BY s.name, t.name, c.column_id
+            ORDER BY schema_name, table_name, column_name
             """
 
             columns, rows = await execute_schema_query(sql, timeout=60)
