@@ -11,7 +11,7 @@ from typing import Optional, Any
 
 from mcp.server.fastmcp import FastMCP
 
-from .db import execute_query, execute_schema_query, get_database_info, check_connection, DatabaseError
+from .db import execute_query, execute_schema_query, get_database_info as fetch_database_info, check_connection, DatabaseError
 from .policy import validate_with_audit, QueryMode, get_query_mode, explain_policy
 from .metrics import MetricsContext, record_query_blocked
 from .utils import format_table, format_json, result_summary
@@ -237,7 +237,7 @@ async def get_database_info() -> str:
 
     with MetricsContext(tool_name) as metrics:
         try:
-            info = await get_database_info()
+            info = await fetch_database_info()
             metrics.set_rows(1)
 
             from .utils import format_json
