@@ -1,14 +1,16 @@
 # MSSQL MCP Python Server
 This is a MCP (Model Context Protocol) server implementation in Python that safely exposes SQL Server database capabilities to LLM clients.
 
+- If you want a complete guide of how to use, [click here](/docs/HOW_TO_USE.md)!
+
 ## Quick Start
 ### 1. Install Dependencies
 ```bash
 cd mssql-mcp-python
 pip install -r requirements.txt
 
-# or for development:
-pip install -e ".[dev]"
+# or:
+uv sync
 ```
 
 ### 2. Configure Database
