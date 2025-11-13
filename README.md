@@ -1,13 +1,15 @@
+<div align="center">
+  <img src="docs/logo.png" alt="logo">
+</div>
+
 # MSSQL MCP Python Server
 
 [![GitHub stars](https://img.shields.io/github/stars/lorenzouriel/mssql-mcp-python?style=social)](https://github.com/lorenzouriel/mssql-mcp-python/stargazers)
 [![GitHub forks](https://img.shields.io/github/forks/lorenzouriel/mssql-mcp-python?style=social)](https://github.com/lorenzouriel/mssql-mcp-python/network/members)
 [![GitHub issues](https://img.shields.io/github/issues/lorenzouriel/mssql-mcp-python)](https://github.com/lorenzouriel/mssql-mcp-python/issues)
-[![GitHub license](https://img.shields.io/github/license/lorenzouriel/mssql-mcp-python)](https://github.com/lorenzouriel/mssql-mcp-python/blob/main/LICENSE)
 [![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/downloads/)
 [![GitHub release](https://img.shields.io/github/v/release/lorenzouriel/mssql-mcp-python)](https://github.com/lorenzouriel/mssql-mcp-python/releases)
 [![Downloads](https://img.shields.io/github/downloads/lorenzouriel/mssql-mcp-python/total)](https://github.com/lorenzouriel/mssql-mcp-python/releases)
-[![Code of Conduct](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](CODE_OF_CONDUCT.md)
 
 This is a MCP (Model Context Protocol) server implementation in Python that safely exposes SQL Server database capabilities to LLM clients.
 
