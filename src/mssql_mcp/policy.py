@@ -181,6 +181,7 @@ def explain_policy() -> dict:
             "list_schemas",
             "list_tables",
             "schema_discovery",
+            "describe_table",
             "get_database_info",
         ],
         "banned_patterns": READ_ONLY_BANNED_PATTERNS if mode == QueryMode.READ_ONLY else [],
