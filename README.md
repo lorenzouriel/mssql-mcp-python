@@ -49,6 +49,10 @@ python -m mssql_mcp.cli --transport http --bind 0.0.0.0:8080
 # Build and run
 docker build -t mssql-mcp:latest .
 docker run -e MSSQL_CONNECTION_STRING="..." mssql-mcp:latest
+
+# Or with Docker Compose (HTTP transport, reads .env)
+cp .env.example .env   # then edit connection string
+docker compose up -d
 ```
 
 ### 4. Test with curl (HTTP mode)
@@ -209,6 +213,16 @@ MSSQL_ENCODING=cp1250 python -m mssql_mcp.cli
 ```
 - `MSSQL_ENCODING` (default `utf-8`) — decoding of narrow `SQL_CHAR`/`VARCHAR` columns
 - `MSSQL_WIDE_ENCODING` (default `utf-16-le`) — wide `SQL_WCHAR`/`NVARCHAR` decoding **and** the query/parameter send encoding (SQL Server expects UTF-16LE; sending UTF-8 corrupts accented literals in queries)
+
+### Allow External Access (HTTP transport)
+By default the server only accepts requests whose Host is `localhost` or
+`127.0.0.1` (DNS rebinding protection). To allow access via an external
+hostname, set `ALLOWED_HOST` to that host (without port):
+```bash
+ALLOWED_HOST=mcp.example.com python -m mssql_mcp.cli --transport http --bind 0.0.0.0:8080
+```
+This adds the host to both the allowed hosts and the CORS origins list; local
+access keeps working.
 
 ### Run Multiple Instances
 ```bash

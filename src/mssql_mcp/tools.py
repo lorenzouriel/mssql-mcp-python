@@ -10,7 +10,9 @@ import time
 from typing import Optional, Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
+from .config import settings
 from .db import execute_query, execute_schema_query, get_database_info as fetch_database_info, check_connection, DatabaseError
 from .policy import validate_with_audit, QueryMode, get_query_mode, explain_policy
 from .metrics import MetricsContext, record_query_blocked
@@ -18,8 +20,29 @@ from .utils import format_table, format_json, result_summary
 
 logger = logging.getLogger(__name__)
 
-# Create MCP server instance
-mcp = FastMCP("mssql-mcp")
+
+def _get_transport_security() -> TransportSecuritySettings:
+    """Build transport security settings, honoring the optional ALLOWED_HOST.
+
+    DNS rebinding protection stays enabled. localhost/127.0.0.1 are always
+    allowed; ALLOWED_HOST (if set) adds an external hostname for HTTP access.
+    """
+    allowed_hosts = ["localhost:*", "127.0.0.1:*"]
+    allowed_origins = ["http://localhost:*", "http://127.0.0.1:*"]
+
+    if settings.ALLOWED_HOST:
+        allowed_hosts.append(f"{settings.ALLOWED_HOST}:*")
+        allowed_origins.append(f"http://{settings.ALLOWED_HOST}:*")
+
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
+    )
+
+
+# Create MCP server instance with transport security
+mcp = FastMCP("mssql-mcp", transport_security=_get_transport_security())
 
 
 @mcp.tool()
