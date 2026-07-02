@@ -47,8 +47,13 @@ def get_connection():
             autocommit=False,
             timeout=settings.MSSQL_CONNECTION_TIMEOUT,
         )
-        # Set connection options
-        conn.setencoding(encoding="utf-8")
+        # Configure character encoding so non-ASCII data (e.g. accented text) is
+        # decoded correctly. Without explicit setdecoding, pyodbc falls back to
+        # platform defaults, which can garble VARCHAR/NVARCHAR results.
+        conn.setencoding(encoding=settings.MSSQL_ENCODING)
+        conn.setdecoding(pyodbc.SQL_CHAR, encoding=settings.MSSQL_ENCODING)
+        conn.setdecoding(pyodbc.SQL_WCHAR, encoding=settings.MSSQL_WIDE_ENCODING)
+        conn.setdecoding(pyodbc.SQL_WMETADATA, encoding=settings.MSSQL_WIDE_ENCODING)
         yield conn
     except pyodbc.Error as e:
         logger.exception("Database connection error: %s", e)
