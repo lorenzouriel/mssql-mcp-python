@@ -196,8 +196,8 @@ legacy code-page collation, override the narrow encoding:
 # e.g. Central-European legacy VARCHAR data
 MSSQL_ENCODING=cp1250 python -m mssql_mcp.cli
 ```
-- `MSSQL_ENCODING` (default `utf-8`) — narrow `SQL_CHAR`/`VARCHAR` columns and parameter binding
-- `MSSQL_WIDE_ENCODING` (default `utf-16-le`) — wide `SQL_WCHAR`/`NVARCHAR` columns
+- `MSSQL_ENCODING` (default `utf-8`) — decoding of narrow `SQL_CHAR`/`VARCHAR` columns
+- `MSSQL_WIDE_ENCODING` (default `utf-16-le`) — wide `SQL_WCHAR`/`NVARCHAR` decoding **and** the query/parameter send encoding (SQL Server expects UTF-16LE; sending UTF-8 corrupts accented literals in queries)
 
 ### Run Multiple Instances
 ```bash

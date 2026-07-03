@@ -48,9 +48,11 @@ def get_connection():
             timeout=settings.MSSQL_CONNECTION_TIMEOUT,
         )
         # Configure character encoding so non-ASCII data (e.g. accented text) is
-        # decoded correctly. Without explicit setdecoding, pyodbc falls back to
-        # platform defaults, which can garble VARCHAR/NVARCHAR results.
-        conn.setencoding(encoding=settings.MSSQL_ENCODING)
+        # sent and decoded correctly. SQL Server expects the query/parameter text
+        # as UTF-16LE (setencoding); sending UTF-8 corrupts non-ASCII literals in
+        # queries. Result decoding is set explicitly too, since pyodbc's platform
+        # defaults can otherwise garble VARCHAR/NVARCHAR values.
+        conn.setencoding(encoding=settings.MSSQL_WIDE_ENCODING)
         conn.setdecoding(pyodbc.SQL_CHAR, encoding=settings.MSSQL_ENCODING)
         conn.setdecoding(pyodbc.SQL_WCHAR, encoding=settings.MSSQL_WIDE_ENCODING)
         conn.setdecoding(pyodbc.SQL_WMETADATA, encoding=settings.MSSQL_WIDE_ENCODING)
