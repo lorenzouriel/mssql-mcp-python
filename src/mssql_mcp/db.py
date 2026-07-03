@@ -73,6 +73,61 @@ def _fetch_rows(cursor, max_rows: int, batch_size: int = 1000) -> Tuple[List[Tup
     return rows, truncated
 
 
+def _quote_odbc_value(value: str) -> str:
+    """Wrap an ODBC connection value in braces if it contains special chars."""
+    if value and (";" in value or "{" in value or "}" in value or value.strip() != value):
+        return "{" + value.replace("}", "}}") + "}"
+    return value
+
+
+def build_connection_string() -> str:
+    """Build the effective connection string, applying optional credential overrides.
+
+    MSSQL_USER / MSSQL_PASSWORD (and MSSQL_TRUSTED_CONNECTION) take precedence over
+    UID/PWD embedded in MSSQL_CONNECTION_STRING, so a deployment can run under its
+    own SQL login without editing the base connection string. Only the credential
+    keys being overridden are replaced; everything else is preserved.
+    """
+    base = settings.MSSQL_CONNECTION_STRING
+    user = settings.MSSQL_USER
+    password = settings.MSSQL_PASSWORD
+    trusted = settings.MSSQL_TRUSTED_CONNECTION
+
+    # No overrides configured -> use the connection string as-is.
+    if not user and not password and trusted is None:
+        return base
+
+    # Determine which credential keys to drop from the base string.
+    drop = set()
+    if trusted is True:
+        drop |= {"uid", "pwd", "user id", "password", "trusted_connection"}
+    elif trusted is False:
+        drop |= {"trusted_connection"}
+    if user:
+        drop |= {"uid", "user id"}
+    if password:
+        drop |= {"pwd", "password"}
+
+    kept = []
+    for part in base.split(";"):
+        if not part.strip():
+            continue
+        key = part.split("=", 1)[0].strip().lower()
+        if key in drop:
+            continue
+        kept.append(part.strip())
+
+    if trusted is True:
+        kept.append("Trusted_Connection=yes")
+    else:
+        if user:
+            kept.append(f"UID={_quote_odbc_value(user)}")
+        if password:
+            kept.append(f"PWD={_quote_odbc_value(password)}")
+
+    return ";".join(kept) + ";"
+
+
 @contextmanager
 def get_connection():
     """
@@ -82,7 +137,7 @@ def get_connection():
     conn = None
     try:
         conn = pyodbc.connect(
-            settings.MSSQL_CONNECTION_STRING,
+            build_connection_string(),
             autocommit=False,
             timeout=settings.MSSQL_CONNECTION_TIMEOUT,
         )

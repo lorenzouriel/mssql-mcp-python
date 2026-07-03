@@ -193,6 +193,25 @@ LOG_LEVEL=DEBUG python -m mssql_mcp.cli
 ```bash
 ENABLE_WRITES=true ADMIN_CONFIRM=secret python -m mssql_mcp.cli
 ```
+> The app-level `ENABLE_WRITES` switch is only the first line of defense. The
+> ultimate authority is the permissions of the SQL login you connect as — see
+> credential override below.
+
+### Use a Specific SQL Login (credential override)
+Each deployment can run under its own SQL login without editing the base
+connection string. `MSSQL_USER` / `MSSQL_PASSWORD` take precedence over any
+`UID`/`PWD` embedded in `MSSQL_CONNECTION_STRING`:
+```bash
+# Base string holds only driver/server/database; identity comes from these:
+MSSQL_USER=reporting_ro MSSQL_PASSWORD=secret python -m mssql_mcp.cli
+```
+- `MSSQL_USER`, `MSSQL_PASSWORD` — override the SQL credentials (ideal for secrets).
+- `MSSQL_TRUSTED_CONNECTION=true` — use Windows/Integrated auth instead (ignores user/password).
+
+Because the connected login's own permissions govern access, connecting with a
+read-only login enforces read-only **at the database level**, regardless of
+`ENABLE_WRITES`. Conversely, allowing writes requires both `ENABLE_WRITES=true`
+and a login that has write permission.
 
 ### Increase Query Timeout
 ```bash
