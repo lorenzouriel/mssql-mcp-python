@@ -5,15 +5,17 @@ Implements @mcp.tool() decorated functions that are exposed to MCP clients.
 Each tool validates input, applies policies, executes DB queries, and returns results.
 """
 
+import base64
 import logging
 import time
 from typing import Optional, Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Context
 from mcp.server.transport_security import TransportSecuritySettings
 
 from .config import settings
-from .db import execute_query, execute_schema_query, get_database_info as fetch_database_info, check_connection, DatabaseError
+
+from .db import execute_query, execute_schema_query, get_database_info as fetch_database_info, check_connection, DatabaseError, request_credentials
 from .policy import validate_with_audit, QueryMode, get_query_mode, explain_policy
 from .metrics import MetricsContext, record_query_blocked
 from .utils import format_table, format_json, result_summary
@@ -21,25 +23,79 @@ from .utils import format_table, format_json, result_summary
 logger = logging.getLogger(__name__)
 
 
-def _get_transport_security() -> TransportSecuritySettings:
-    """Build transport security settings, honoring the optional ALLOWED_HOST.
+# HTTP headers a remote client may send (e.g. in its MCP config) to authenticate
+# as its own SQL login for the duration of a request, overriding the server's
+# default credentials. Passwords travel in headers, so use HTTPS / a trusted
+# network in production.
+#
+# HTTP header values must be Latin-1 (bytes 0-255), so a value with non-ASCII
+# characters (e.g. accented passwords) cannot be sent raw — many clients refuse
+# to. For those, send the base64 of the UTF-8 value in the "<header>-B64" variant
+# instead; it takes precedence over the plain header.
+_HDR_USER = "X-MSSQL-User"
+_HDR_PASSWORD = "X-MSSQL-Password"
+_HDR_TRUSTED = "X-MSSQL-Trusted-Connection"
+_B64_SUFFIX = "-B64"
 
-    DNS rebinding protection stays enabled. localhost/127.0.0.1 are always
-    allowed; ALLOWED_HOST (if set) adds an external hostname for HTTP access.
+
+def _header_value(headers, name: str) -> Optional[str]:
+    """Return a header's value, preferring its base64 variant (<name>-B64).
+
+    The base64 form lets clients pass values containing non-Latin-1 characters,
+    which raw HTTP headers cannot carry.
     """
+    b64 = headers.get(name + _B64_SUFFIX)
+    if b64:
+        try:
+            return base64.b64decode(b64).decode("utf-8")
+        except Exception:
+            logger.warning("Ignoring malformed base64 header: %s", name + _B64_SUFFIX)
+            return None
+    return headers.get(name)
+
+
+def _creds_from_ctx(ctx: Optional[Context]) -> dict:
+    """Extract optional per-request SQL credentials from the MCP request headers.
+
+    Returns a dict suitable for request_credentials(**...); empty when none are
+    provided (e.g. stdio transport, or a client that sends no credential headers).
+    """
+    if ctx is None:
+        return {}
+    try:
+        request = ctx.request_context.request
+    except Exception:
+        return {}
+    headers = getattr(request, "headers", None)
+    if not headers:
+        return {}
+
+    creds: dict = {}
+    user = _header_value(headers, _HDR_USER)
+    password = _header_value(headers, _HDR_PASSWORD)
+    trusted_raw = _header_value(headers, _HDR_TRUSTED)
+    if user:
+        creds["user"] = user
+    if password:
+        creds["password"] = password
+    if trusted_raw is not None:
+        creds["trusted"] = trusted_raw.strip().lower() in ("1", "true", "yes", "on")
+    return creds
+
+def _get_transport_security():
+    """Configure transport security based on ALLOWED_HOST setting."""
     allowed_hosts = ["localhost:*", "127.0.0.1:*"]
     allowed_origins = ["http://localhost:*", "http://127.0.0.1:*"]
-
+    
     if settings.ALLOWED_HOST:
         allowed_hosts.append(f"{settings.ALLOWED_HOST}:*")
         allowed_origins.append(f"http://{settings.ALLOWED_HOST}:*")
-
+    
     return TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
         allowed_hosts=allowed_hosts,
         allowed_origins=allowed_origins,
     )
-
 
 # Create MCP server instance with transport security
 mcp = FastMCP("mssql-mcp", transport_security=_get_transport_security())
@@ -51,6 +107,7 @@ async def execute_sql(
     format: str = "table",
     timeout: Optional[int] = None,
     max_rows: Optional[int] = None,
+    ctx: Optional[Context] = None,
 ) -> str:
     """
     Execute a SQL statement against the SQL Server database.
@@ -89,7 +146,8 @@ async def execute_sql(
     # Execute query with metrics tracking
     with MetricsContext(tool_name) as metrics:
         try:
-            res = await execute_query(sql, timeout=timeout, max_rows=max_rows)
+            with request_credentials(**_creds_from_ctx(ctx)):
+                res = await execute_query(sql, timeout=timeout, max_rows=max_rows)
             metrics.set_rows(len(res.rows))
 
             # Write statement / no result set: report affected rows.
@@ -119,7 +177,7 @@ async def execute_sql(
 
 
 @mcp.tool()
-async def list_schemas() -> str:
+async def list_schemas(ctx: Optional[Context] = None) -> str:
     """
     List all schemas in the current database.
 
@@ -138,7 +196,8 @@ async def list_schemas() -> str:
             FROM sys.schemas
             ORDER BY name
             """
-            res = await execute_schema_query(sql)
+            with request_credentials(**_creds_from_ctx(ctx)):
+                res = await execute_schema_query(sql)
             metrics.set_rows(len(res.rows))
 
             if not res.rows:
@@ -154,7 +213,7 @@ async def list_schemas() -> str:
 
 
 @mcp.tool()
-async def list_tables(schema: Optional[str] = None, limit: int = 200) -> str:
+async def list_tables(schema: Optional[str] = None, limit: int = 200, ctx: Optional[Context] = None) -> str:
     """
     List tables in the database, optionally filtered by schema.
 
@@ -193,7 +252,8 @@ async def list_tables(schema: Optional[str] = None, limit: int = 200) -> str:
             ORDER BY s.name, t.name
             """
 
-            res = await execute_schema_query(sql)
+            with request_credentials(**_creds_from_ctx(ctx)):
+                res = await execute_schema_query(sql)
             metrics.set_rows(len(res.rows))
 
             if not res.rows:
@@ -209,7 +269,7 @@ async def list_tables(schema: Optional[str] = None, limit: int = 200) -> str:
 
 
 @mcp.tool()
-async def schema_discovery(schema: Optional[str] = None) -> str:
+async def schema_discovery(schema: Optional[str] = None, ctx: Optional[Context] = None) -> str:
     """
     Discover schema information: tables, columns, types, and constraints.
 
@@ -252,7 +312,8 @@ async def schema_discovery(schema: Optional[str] = None) -> str:
             ORDER BY schema_name, table_name, column_name
             """
 
-            res = await execute_schema_query(sql, timeout=60)
+            with request_credentials(**_creds_from_ctx(ctx)):
+                res = await execute_schema_query(sql, timeout=60)
             metrics.set_rows(len(res.rows))
 
             if not res.rows:
@@ -269,7 +330,7 @@ async def schema_discovery(schema: Optional[str] = None) -> str:
 
 
 @mcp.tool()
-async def describe_table(table: str) -> str:
+async def describe_table(table: str, ctx: Optional[Context] = None) -> str:
     """
     Describe a single table's structure: columns, data types, length,
     nullability, primary-key membership, and column descriptions.
@@ -328,7 +389,8 @@ async def describe_table(table: str) -> str:
             WHERE {where}
             ORDER BY s.name, t.name, c.column_id
             """
-            res = await execute_schema_query(sql)
+            with request_credentials(**_creds_from_ctx(ctx)):
+                res = await execute_schema_query(sql)
             metrics.set_rows(len(res.rows))
 
             if not res.rows:
@@ -342,7 +404,7 @@ async def describe_table(table: str) -> str:
 
 
 @mcp.tool()
-async def get_database_info() -> str:
+async def get_database_info(ctx: Optional[Context] = None) -> str:
     """
     Get general information about the database and server.
 
@@ -353,7 +415,8 @@ async def get_database_info() -> str:
 
     with MetricsContext(tool_name) as metrics:
         try:
-            info = await fetch_database_info()
+            with request_credentials(**_creds_from_ctx(ctx)):
+                info = await fetch_database_info()
             metrics.set_rows(1)
 
             from .utils import format_json
@@ -393,7 +456,7 @@ async def get_policy_info() -> str:
 
 
 @mcp.tool()
-async def check_db_connection() -> str:
+async def check_db_connection(ctx: Optional[Context] = None) -> str:
     """
     Check if the database connection is active and healthy.
 
@@ -404,7 +467,8 @@ async def check_db_connection() -> str:
 
     with MetricsContext(tool_name) as metrics:
         try:
-            is_connected = await check_connection()
+            with request_credentials(**_creds_from_ctx(ctx)):
+                is_connected = await check_connection()
             metrics.set_rows(1)
 
             if is_connected:
