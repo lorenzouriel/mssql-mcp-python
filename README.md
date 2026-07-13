@@ -69,11 +69,15 @@ curl http://localhost:8080/metrics
 ## Available MCP Tools
 The server exposes these tools to MCP clients:
 
-### 1. `execute_sql(sql, format="table")`
-Execute SELECT queries (or write operations if enabled)
+### 1. `execute_sql(sql, format="table", timeout=None, max_rows=None)`
+Execute SELECT queries (or write operations if enabled).
+- `format`: `"table"`, `"json"` or `"csv"`.
+- `timeout`: per-query timeout (seconds), overrides `MSSQL_QUERY_TIMEOUT` for slow queries.
+- `max_rows`: per-query row cap, overrides `MAX_ROWS_PER_QUERY`.
 ```
-Input: "SELECT * FROM users LIMIT 10"
-Output: ASCII table or JSON
+Input: "SELECT TOP 10 * FROM users", format="json"
+Output: JSON rows + summary; truncation is flagged explicitly.
+        Write statements return the affected-row count.
 ```
 
 ### 2. `list_schemas()`
@@ -97,21 +101,28 @@ Input: schema="dbo"
 Output: JSON with detailed column info
 ```
 
-### 5. `get_database_info()`
+### 5. `describe_table(table)`
+Describe a single table: columns, types, nullability, primary keys, descriptions
+```
+Input: table="dbo.users"  (schema prefix optional)
+Output: JSON column metadata for that one table
+```
+
+### 6. `get_database_info()`
 Get server/database metadata
 ```
 Input: (none)
 Output: Database name, version, machine name
 ```
 
-### 6. `get_policy_info()`
+### 7. `get_policy_info()`
 Get current security policy settings
 ```
 Input: (none)
 Output: Policy details (allowed operations, limits)
 ```
 
-### 7. `check_db_connection()`
+### 8. `check_db_connection()`
 Health check for database connectivity
 ```
 Input: (none)

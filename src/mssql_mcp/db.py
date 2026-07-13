@@ -8,12 +8,29 @@ Uses pyodbc with connection pooling and thread-safe execution via asyncio.to_thr
 import asyncio
 import logging
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from typing import List, Tuple, Iterator, Optional, Any
 import pyodbc
 
 from .config import settings
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class QueryResult:
+    """Result of a query execution.
+
+    Attributes:
+        columns: Column names (empty for statements with no result set).
+        rows: Result rows, capped at max_rows.
+        truncated: True if more rows were available than max_rows.
+        rowcount: Affected-row count for write statements; -1 when not applicable.
+    """
+    columns: List[str] = field(default_factory=list)
+    rows: List[Tuple[Any, ...]] = field(default_factory=list)
+    truncated: bool = False
+    rowcount: int = -1
 
 # Enable ODBC connection pooling for better resource management
 pyodbc.pooling = True
@@ -32,6 +49,28 @@ class QueryTimeoutError(DatabaseError):
 class ConnectionError(DatabaseError):
     """Database connection error."""
     pass
+
+
+def _fetch_rows(cursor, max_rows: int, batch_size: int = 1000) -> Tuple[List[Tuple[Any, ...]], bool]:
+    """Fetch up to max_rows rows from a cursor, reporting truncation.
+
+    Allows the row count to exceed max_rows before trimming so that a result
+    of exactly max_rows rows is not mislabelled as truncated.
+
+    Returns (rows, truncated).
+    """
+    rows: List[Tuple[Any, ...]] = []
+    truncated = False
+    while True:
+        batch = cursor.fetchmany(batch_size)
+        if not batch:
+            break
+        rows.extend(batch)
+        if len(rows) > max_rows:
+            rows = rows[:max_rows]
+            truncated = True
+            break
+    return rows, truncated
 
 
 @contextmanager
@@ -73,20 +112,21 @@ async def execute_query(
     params: Tuple = (),
     timeout: Optional[int] = None,
     max_rows: Optional[int] = None,
-) -> Tuple[List[str], List[Tuple[Any, ...]]]:
+) -> QueryResult:
     """
-    Execute a SQL SELECT statement asynchronously.
+    Execute a SQL statement asynchronously.
 
-    Runs in a thread to avoid blocking the event loop. Returns columns and rows.
+    Runs in a thread to avoid blocking the event loop. Handles both queries that
+    return a result set (SELECT) and statements that do not (INSERT/UPDATE/DELETE).
 
     Args:
-        sql: SQL query string (should be SELECT)
+        sql: SQL statement to execute
         params: Query parameters (for parameterized queries)
         timeout: Query timeout in seconds (defaults to MSSQL_QUERY_TIMEOUT)
         max_rows: Maximum rows to return (defaults to MAX_ROWS_PER_QUERY)
 
     Returns:
-        Tuple of (column_names, rows)
+        QueryResult with columns, rows, truncated flag and affected rowcount.
 
     Raises:
         QueryTimeoutError: If query exceeds timeout
@@ -97,7 +137,7 @@ async def execute_query(
     if max_rows is None:
         max_rows = settings.MAX_ROWS_PER_QUERY
 
-    def _sync_execute() -> Tuple[List[str], List[Tuple[Any, ...]]]:
+    def _sync_execute() -> QueryResult:
         """Synchronous query execution in thread."""
         with get_connection() as conn:
             cursor = conn.cursor()
@@ -106,23 +146,17 @@ async def execute_query(
                 # Extract column names from cursor description
                 columns = [desc[0] for desc in cursor.description] if cursor.description else []
 
-                # Fetch rows with batch processing for memory efficiency
-                rows: List[Tuple[Any, ...]] = []
                 if columns:
-                    batch_size = 1000
-                    while True:
-                        batch = cursor.fetchmany(batch_size)
-                        if not batch:
-                            break
-                        rows.extend(batch)
-                        if len(rows) >= max_rows:
-                            rows = rows[:max_rows]
-                            break
+                    # Fetch rows with batch processing for memory efficiency,
+                    # flagging truncation when more than max_rows are available.
+                    rows, truncated = _fetch_rows(cursor, max_rows)
+                    return QueryResult(columns=columns, rows=rows, truncated=truncated)
                 else:
-                    # No columns means no result set (USE statement)
+                    # No result set: write statement (INSERT/UPDATE/DELETE) or USE.
+                    # Capture affected rows and commit the transaction.
+                    rowcount = cursor.rowcount
                     conn.commit()
-
-                return columns, rows
+                    return QueryResult(columns=[], rows=[], rowcount=rowcount)
             except pyodbc.Error as e:
                 logger.exception("Query execution error: %s", e)
                 raise DatabaseError(f"Query execution failed: {e}") from e
@@ -147,7 +181,7 @@ async def execute_query(
         raise DatabaseError(f"Unexpected error: {e}") from e
 
 
-async def execute_schema_query(sql: str, timeout: Optional[int] = None) -> Tuple[List[str], List[Tuple[Any, ...]]]:
+async def execute_schema_query(sql: str, timeout: Optional[int] = None) -> QueryResult:
     """
     Execute a schema/metadata query with relaxed row limits.
     Used for list_tables, list_schemas, schema_discovery.
@@ -169,9 +203,9 @@ async def get_database_info() -> dict:
             SERVERPROPERTY('MachineName') as machine_name,
             SERVERPROPERTY('InstanceName') as instance_name
         """
-        cols, rows = await execute_schema_query(sql)
-        if rows:
-            return dict(zip(cols, rows[0]))
+        result = await execute_schema_query(sql)
+        if result.rows:
+            return dict(zip(result.columns, result.rows[0]))
         return {}
     except Exception as e:
         logger.exception("Error fetching database info: %s", e)
@@ -183,7 +217,7 @@ async def check_connection() -> bool:
     Test database connectivity.
     """
     try:
-        cols, rows = await execute_query("SELECT 1 as test", timeout=5)
+        await execute_query("SELECT 1 as test", timeout=5)
         return True
     except Exception as e:
         logger.error("Connection check failed: %s", e)
