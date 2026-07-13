@@ -188,6 +188,17 @@ ENABLE_WRITES=true ADMIN_CONFIRM=secret python -m mssql_mcp.cli
 MSSQL_QUERY_TIMEOUT=120 python -m mssql_mcp.cli
 ```
 
+### Fix Garbled Non-ASCII Characters (accents, etc.)
+Results are decoded using explicit encodings. The defaults work for most SQL Server
+setups (NVARCHAR is UTF-16LE, VARCHAR is read as UTF-8). If `VARCHAR` columns use a
+legacy code-page collation, override the narrow encoding:
+```bash
+# e.g. Central-European legacy VARCHAR data
+MSSQL_ENCODING=cp1250 python -m mssql_mcp.cli
+```
+- `MSSQL_ENCODING` (default `utf-8`) — decoding of narrow `SQL_CHAR`/`VARCHAR` columns
+- `MSSQL_WIDE_ENCODING` (default `utf-16-le`) — wide `SQL_WCHAR`/`NVARCHAR` decoding **and** the query/parameter send encoding (SQL Server expects UTF-16LE; sending UTF-8 corrupts accented literals in queries)
+
 ### Run Multiple Instances
 ```bash
 python -m mssql_mcp.cli --transport http --bind 127.0.0.1:8080

@@ -19,6 +19,15 @@ class Settings(BaseSettings):
     MSSQL_QUERY_TIMEOUT: int = 30  # seconds
     MSSQL_MAX_POOL_SIZE: int = 10
 
+    # Character encoding for pyodbc (fixes garbled non-ASCII, e.g. accented text).
+    # MSSQL_WIDE_ENCODING is used for wide SQL_WCHAR/NVARCHAR decoding AND for the
+    # query/parameter send encoding — SQL Server expects UTF-16LE, so leave this at
+    # the default unless you know otherwise. MSSQL_ENCODING covers narrow
+    # SQL_CHAR/VARCHAR decoding; override it (e.g. "cp1250") if VARCHAR data uses a
+    # legacy code-page collation.
+    MSSQL_ENCODING: str = "utf-8"
+    MSSQL_WIDE_ENCODING: str = "utf-16-le"
+
     # Security & safety
     READ_ONLY: bool = True
     ENABLE_WRITES: bool = False
