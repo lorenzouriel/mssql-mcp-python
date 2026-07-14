@@ -45,6 +45,12 @@ class Settings(BaseSettings):
     HTTP_BIND_HOST: str = "127.0.0.1"
     HTTP_BIND_PORT: int = 8080
 
+    # DNS rebinding protection (HTTP transport).
+    # By default only localhost/127.0.0.1 are accepted. Set this to the server's
+    # external hostname (without port) to allow access via that host, e.g.
+    # "mcp.example.com". Leave unset for local-only use.
+    ALLOWED_HOST: Optional[str] = None
+
     # Logging
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "json"  # 'json' or 'text'
