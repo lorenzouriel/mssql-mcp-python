@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     # Database connection
-    MSSQL_CONNECTION_STRING: str 
+    MSSQL_CONNECTION_STRING: str
     MSSQL_CONNECTION_TIMEOUT: int = 30  # seconds
     MSSQL_QUERY_TIMEOUT: int = 30  # seconds
     MSSQL_MAX_POOL_SIZE: int = 10
@@ -27,6 +27,17 @@ class Settings(BaseSettings):
     # legacy code-page collation.
     MSSQL_ENCODING: str = "utf-8"
     MSSQL_WIDE_ENCODING: str = "utf-16-le"
+
+    # Optional credential override. When set, these take precedence over any
+    # UID/PWD embedded in MSSQL_CONNECTION_STRING, letting each deployment run
+    # under its own SQL login (and thus its own read/write permissions) without
+    # editing the base connection string. Leave unset to use the connection
+    # string as-is.
+    MSSQL_USER: Optional[str] = None
+    MSSQL_PASSWORD: Optional[str] = None
+    # Windows/Integrated authentication. True forces Trusted_Connection=yes
+    # (ignores user/password); False forces SQL auth; None leaves it untouched.
+    MSSQL_TRUSTED_CONNECTION: Optional[bool] = None
 
     # Security & safety
     READ_ONLY: bool = True

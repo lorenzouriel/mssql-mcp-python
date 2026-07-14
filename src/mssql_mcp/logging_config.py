@@ -24,6 +24,7 @@ class SensitiveDataFilter(logging.Filter):
         "pwd",
         "connection_string",
         "MSSQL_CONNECTION_STRING",
+        "MSSQL_PASSWORD",
         "auth_token",
         "token",
         "api_key",
@@ -35,11 +36,11 @@ class SensitiveDataFilter(logging.Filter):
         if hasattr(record, "msg") and isinstance(record.msg, str):
             for key in self.SENSITIVE_KEYS:
                 if key.lower() in record.msg.lower():
-                    # Redact the message
-                    record.msg = record.msg.replace(
-                        settings.MSSQL_CONNECTION_STRING,
-                        "***REDACTED***"
-                    )
+                    # Redact known secret values from the message.
+                    for secret in (settings.MSSQL_CONNECTION_STRING, settings.MSSQL_PASSWORD):
+                        if secret:
+                            record.msg = record.msg.replace(secret, "***REDACTED***")
+                    break
         return True
 
 
