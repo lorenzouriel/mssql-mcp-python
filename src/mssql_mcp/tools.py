@@ -5,15 +5,17 @@ Implements @mcp.tool() decorated functions that are exposed to MCP clients.
 Each tool validates input, applies policies, executes DB queries, and returns results.
 """
 
+import base64
 import logging
 import time
 from typing import Optional, Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Context
 from mcp.server.transport_security import TransportSecuritySettings
 
 from .config import settings
-from .db import execute_query, execute_schema_query, get_database_info as fetch_database_info, check_connection, DatabaseError
+
+from .db import execute_query, execute_schema_query, get_database_info as fetch_database_info, check_connection, DatabaseError, request_credentials
 from .policy import validate_with_audit, QueryMode, get_query_mode, explain_policy
 from .metrics import MetricsContext, record_query_blocked
 from .utils import format_table, format_json, result_summary
@@ -21,28 +23,108 @@ from .utils import format_table, format_json, result_summary
 logger = logging.getLogger(__name__)
 
 
-def _get_transport_security() -> TransportSecuritySettings:
-    """Build transport security settings, honoring the optional ALLOWED_HOST.
+# HTTP headers a remote client may send (e.g. in its MCP config) to authenticate
+# as its own SQL login for the duration of a request, overriding the server's
+# default credentials. Passwords travel in headers, so use HTTPS / a trusted
+# network in production.
+#
+# HTTP header values must be Latin-1 (bytes 0-255), so a value with non-ASCII
+# characters (e.g. accented passwords) cannot be sent raw — many clients refuse
+# to. For those, send the base64 of the UTF-8 value in the "<header>-B64" variant
+# instead; it takes precedence over the plain header.
+_HDR_USER = "X-MSSQL-User"
+_HDR_PASSWORD = "X-MSSQL-Password"
+_HDR_TRUSTED = "X-MSSQL-Trusted-Connection"
+_B64_SUFFIX = "-B64"
 
-    DNS rebinding protection stays enabled. localhost/127.0.0.1 are always
-    allowed; ALLOWED_HOST (if set) adds an external hostname for HTTP access.
+
+def _header_value(headers, name: str) -> Optional[str]:
+    """Return a header's value, preferring its base64 variant (<name>-B64).
+
+    The base64 form lets clients pass values containing non-Latin-1 characters,
+    which raw HTTP headers cannot carry.
     """
+    b64 = headers.get(name + _B64_SUFFIX)
+    if b64:
+        try:
+            return base64.b64decode(b64).decode("utf-8")
+        except Exception:
+            logger.warning("Ignoring malformed base64 header: %s", name + _B64_SUFFIX)
+            return None
+    return headers.get(name)
+
+
+def _creds_from_ctx(ctx: Optional[Context]) -> dict:
+    """Extract optional per-request SQL credentials from the MCP request headers.
+
+    Returns a dict suitable for request_credentials(**...); empty when none are
+    provided (e.g. stdio transport, or a client that sends no credential headers).
+    """
+    if ctx is None:
+        return {}
+    try:
+        request = ctx.request_context.request
+    except Exception:
+        return {}
+    headers = getattr(request, "headers", None)
+    if not headers:
+        return {}
+
+    creds: dict = {}
+    user = _header_value(headers, _HDR_USER)
+    password = _header_value(headers, _HDR_PASSWORD)
+    trusted_raw = _header_value(headers, _HDR_TRUSTED)
+    if user:
+        creds["user"] = user
+    if password:
+        creds["password"] = password
+    if trusted_raw is not None:
+        creds["trusted"] = trusted_raw.strip().lower() in ("1", "true", "yes", "on")
+    return creds
+
+def _get_transport_security():
+    """Configure transport security based on ALLOWED_HOST setting."""
     allowed_hosts = ["localhost:*", "127.0.0.1:*"]
     allowed_origins = ["http://localhost:*", "http://127.0.0.1:*"]
-
+    
     if settings.ALLOWED_HOST:
         allowed_hosts.append(f"{settings.ALLOWED_HOST}:*")
         allowed_origins.append(f"http://{settings.ALLOWED_HOST}:*")
-
+    
     return TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
         allowed_hosts=allowed_hosts,
         allowed_origins=allowed_origins,
     )
 
+# Guidance sent to MCP clients on initialize, so agents use the tools effectively.
+_INSTRUCTIONS = """\
+This server exposes a Microsoft SQL Server database.
+
+To find what you need efficiently:
+- Start with discovery: `list_tables` / `list_schemas`, then `describe_table` for a
+  single table's columns, types, keys and descriptions.
+- Use `get_relationships` to learn foreign keys before writing JOINs.
+- Use `sample_table` to see a few example rows, and `distinct_values` to learn the
+  typical values of a column before filtering on it.
+- Run queries with `execute_sql` (use format="json" for machine-readable output;
+  raise `timeout`/`max_rows` for big/slow queries).
+
+Conventions:
+- The default database follows the connected login; for cross-database queries use
+  fully-qualified names: DATABASE.schema.table.
+- Non-ASCII text (e.g. accented characters) is handled correctly; use N'...' for
+  NVARCHAR string literals.
+- Only single statements are allowed; write operations require the server to be
+  write-enabled and a login with the right permissions.
+"""
 
 # Create MCP server instance with transport security
-mcp = FastMCP("mssql-mcp", transport_security=_get_transport_security())
+mcp = FastMCP(
+    "mssql-mcp",
+    instructions=_INSTRUCTIONS,
+    transport_security=_get_transport_security(),
+)
 
 
 @mcp.tool()
@@ -51,6 +133,7 @@ async def execute_sql(
     format: str = "table",
     timeout: Optional[int] = None,
     max_rows: Optional[int] = None,
+    ctx: Optional[Context] = None,
 ) -> str:
     """
     Execute a SQL statement against the SQL Server database.
@@ -89,7 +172,8 @@ async def execute_sql(
     # Execute query with metrics tracking
     with MetricsContext(tool_name) as metrics:
         try:
-            res = await execute_query(sql, timeout=timeout, max_rows=max_rows)
+            with request_credentials(**_creds_from_ctx(ctx)):
+                res = await execute_query(sql, timeout=timeout, max_rows=max_rows)
             metrics.set_rows(len(res.rows))
 
             # Write statement / no result set: report affected rows.
@@ -119,7 +203,7 @@ async def execute_sql(
 
 
 @mcp.tool()
-async def list_schemas() -> str:
+async def list_schemas(ctx: Optional[Context] = None) -> str:
     """
     List all schemas in the current database.
 
@@ -138,7 +222,8 @@ async def list_schemas() -> str:
             FROM sys.schemas
             ORDER BY name
             """
-            res = await execute_schema_query(sql)
+            with request_credentials(**_creds_from_ctx(ctx)):
+                res = await execute_schema_query(sql)
             metrics.set_rows(len(res.rows))
 
             if not res.rows:
@@ -154,7 +239,7 @@ async def list_schemas() -> str:
 
 
 @mcp.tool()
-async def list_tables(schema: Optional[str] = None, limit: int = 200) -> str:
+async def list_tables(schema: Optional[str] = None, limit: int = 200, ctx: Optional[Context] = None) -> str:
     """
     List tables in the database, optionally filtered by schema.
 
@@ -193,7 +278,8 @@ async def list_tables(schema: Optional[str] = None, limit: int = 200) -> str:
             ORDER BY s.name, t.name
             """
 
-            res = await execute_schema_query(sql)
+            with request_credentials(**_creds_from_ctx(ctx)):
+                res = await execute_schema_query(sql)
             metrics.set_rows(len(res.rows))
 
             if not res.rows:
@@ -209,7 +295,7 @@ async def list_tables(schema: Optional[str] = None, limit: int = 200) -> str:
 
 
 @mcp.tool()
-async def schema_discovery(schema: Optional[str] = None) -> str:
+async def schema_discovery(schema: Optional[str] = None, ctx: Optional[Context] = None) -> str:
     """
     Discover schema information: tables, columns, types, and constraints.
 
@@ -252,7 +338,8 @@ async def schema_discovery(schema: Optional[str] = None) -> str:
             ORDER BY schema_name, table_name, column_name
             """
 
-            res = await execute_schema_query(sql, timeout=60)
+            with request_credentials(**_creds_from_ctx(ctx)):
+                res = await execute_schema_query(sql, timeout=60)
             metrics.set_rows(len(res.rows))
 
             if not res.rows:
@@ -269,7 +356,7 @@ async def schema_discovery(schema: Optional[str] = None) -> str:
 
 
 @mcp.tool()
-async def describe_table(table: str) -> str:
+async def describe_table(table: str, ctx: Optional[Context] = None) -> str:
     """
     Describe a single table's structure: columns, data types, length,
     nullability, primary-key membership, and column descriptions.
@@ -311,7 +398,8 @@ async def describe_table(table: str) -> str:
                 c.scale,
                 c.is_nullable,
                 CASE WHEN pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_primary_key,
-                ep.value AS description
+                CAST(cep.value AS NVARCHAR(MAX)) AS column_description,
+                CAST(tep.value AS NVARCHAR(MAX)) AS table_description
             FROM sys.tables t
             INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
             INNER JOIN sys.columns c ON t.object_id = c.object_id
@@ -323,12 +411,17 @@ async def describe_table(table: str) -> str:
                     ON ic.object_id = i.object_id AND ic.index_id = i.index_id
                 WHERE i.is_primary_key = 1
             ) pk ON pk.object_id = c.object_id AND pk.column_id = c.column_id
-            LEFT JOIN sys.extended_properties ep
-                ON ep.major_id = c.object_id AND ep.minor_id = c.column_id
+            LEFT JOIN sys.extended_properties cep
+                ON cep.major_id = c.object_id AND cep.minor_id = c.column_id
+                AND cep.name = 'MS_Description'
+            LEFT JOIN sys.extended_properties tep
+                ON tep.major_id = t.object_id AND tep.minor_id = 0
+                AND tep.name = 'MS_Description'
             WHERE {where}
             ORDER BY s.name, t.name, c.column_id
             """
-            res = await execute_schema_query(sql)
+            with request_credentials(**_creds_from_ctx(ctx)):
+                res = await execute_schema_query(sql)
             metrics.set_rows(len(res.rows))
 
             if not res.rows:
@@ -342,7 +435,7 @@ async def describe_table(table: str) -> str:
 
 
 @mcp.tool()
-async def get_database_info() -> str:
+async def get_database_info(ctx: Optional[Context] = None) -> str:
     """
     Get general information about the database and server.
 
@@ -353,7 +446,8 @@ async def get_database_info() -> str:
 
     with MetricsContext(tool_name) as metrics:
         try:
-            info = await fetch_database_info()
+            with request_credentials(**_creds_from_ctx(ctx)):
+                info = await fetch_database_info()
             metrics.set_rows(1)
 
             from .utils import format_json
@@ -393,7 +487,7 @@ async def get_policy_info() -> str:
 
 
 @mcp.tool()
-async def check_db_connection() -> str:
+async def check_db_connection(ctx: Optional[Context] = None) -> str:
     """
     Check if the database connection is active and healthy.
 
@@ -404,7 +498,8 @@ async def check_db_connection() -> str:
 
     with MetricsContext(tool_name) as metrics:
         try:
-            is_connected = await check_connection()
+            with request_credentials(**_creds_from_ctx(ctx)):
+                is_connected = await check_connection()
             metrics.set_rows(1)
 
             if is_connected:
@@ -415,3 +510,159 @@ async def check_db_connection() -> str:
         except Exception as e:
             logger.exception("check_db_connection failed")
             return f"ERROR: Database connection check failed - {str(e)}"
+
+
+@mcp.tool()
+async def get_relationships(
+    table: Optional[str] = None,
+    schema: Optional[str] = None,
+    ctx: Optional[Context] = None,
+) -> str:
+    """
+    List foreign-key relationships (parent table.column -> referenced table.column).
+
+    Use this to learn how tables join before writing JOINs. Optionally filter to a
+    single table (matches the FK's parent or referenced side) and/or a schema.
+
+    Returns:
+        JSON list of relationships, or a message if none are found.
+    """
+    tool_name = "get_relationships"
+    from .utils import escape_sql_string, format_json
+
+    with MetricsContext(tool_name) as metrics:
+        try:
+            filters = []
+            if table:
+                t = escape_sql_string(table)
+                filters.append(f"(pt.name = {t} OR rt.name = {t})")
+            if schema:
+                s = escape_sql_string(schema)
+                filters.append(f"(ps.name = {s} OR rs.name = {s})")
+            where = ("WHERE " + " AND ".join(filters)) if filters else ""
+
+            sql = f"""
+            SELECT
+                fk.name AS fk_name,
+                ps.name AS parent_schema,
+                pt.name AS parent_table,
+                pc.name AS parent_column,
+                rs.name AS referenced_schema,
+                rt.name AS referenced_table,
+                rc.name AS referenced_column
+            FROM sys.foreign_keys fk
+            INNER JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
+            INNER JOIN sys.tables pt ON pt.object_id = fk.parent_object_id
+            INNER JOIN sys.schemas ps ON ps.schema_id = pt.schema_id
+            INNER JOIN sys.columns pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id
+            INNER JOIN sys.tables rt ON rt.object_id = fk.referenced_object_id
+            INNER JOIN sys.schemas rs ON rs.schema_id = rt.schema_id
+            INNER JOIN sys.columns rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id
+            {where}
+            ORDER BY ps.name, pt.name, fk.name, fkc.constraint_column_id
+            """
+            with request_credentials(**_creds_from_ctx(ctx)):
+                res = await execute_schema_query(sql)
+            metrics.set_rows(len(res.rows))
+
+            if not res.rows:
+                return "No foreign-key relationships found."
+            return format_json(res.columns, res.rows)
+
+        except Exception as e:
+            logger.exception("get_relationships failed")
+            return f"ERROR: {type(e).__name__}: {str(e)}"
+
+
+def _qualified_name(table: str) -> Optional[str]:
+    """Turn 'db.schema.table' / 'schema.table' / 'table' into a safely bracketed name."""
+    from .utils import escape_sql_identifier
+    parts = [p.strip() for p in table.split(".")]
+    if not table.strip() or len(parts) > 3 or any(not p for p in parts):
+        return None
+    return ".".join(escape_sql_identifier(p) for p in parts)
+
+
+@mcp.tool()
+async def sample_table(table: str, limit: int = 5, ctx: Optional[Context] = None) -> str:
+    """
+    Return a few example rows from a table, to understand its data shape and values.
+
+    Args:
+        table: Table name, optionally schema-/database-qualified
+            (e.g. 'dbo.users' or 'MyDb.dbo.users').
+        limit: Number of rows to return (default 5, max 100).
+
+    Returns:
+        JSON rows, or a message if the table is empty.
+    """
+    tool_name = "sample_table"
+    from .utils import format_json
+
+    if limit < 1:
+        return "ERROR: limit must be >= 1"
+    limit = min(limit, 100)
+    qualified = _qualified_name(table)
+    if not qualified:
+        return "ERROR: invalid table name"
+
+    with MetricsContext(tool_name) as metrics:
+        try:
+            sql = f"SELECT TOP {limit} * FROM {qualified}"
+            with request_credentials(**_creds_from_ctx(ctx)):
+                res = await execute_query(sql, max_rows=limit)
+            metrics.set_rows(len(res.rows))
+
+            if not res.rows:
+                return f"No rows in {table}."
+            return format_json(res.columns, res.rows)
+
+        except Exception as e:
+            logger.exception("sample_table failed")
+            return f"ERROR: {type(e).__name__}: {str(e)}"
+
+
+@mcp.tool()
+async def distinct_values(table: str, column: str, limit: int = 20, ctx: Optional[Context] = None) -> str:
+    """
+    Show a column's most frequent distinct values with counts, to learn what to
+    filter on (e.g. the set of status codes or categories in a column).
+
+    Args:
+        table: Table name, optionally schema-/database-qualified.
+        column: Column name.
+        limit: Max distinct values to return (default 20, max 200).
+
+    Returns:
+        JSON list of {value, count}, most frequent first.
+    """
+    tool_name = "distinct_values"
+    from .utils import escape_sql_identifier, format_json
+
+    if limit < 1:
+        return "ERROR: limit must be >= 1"
+    limit = min(limit, 200)
+    qualified = _qualified_name(table)
+    if not qualified:
+        return "ERROR: invalid table name"
+    if not column.strip():
+        return "ERROR: column is required"
+    col = escape_sql_identifier(column.strip())
+
+    with MetricsContext(tool_name) as metrics:
+        try:
+            sql = (
+                f"SELECT TOP {limit} {col} AS value, COUNT(*) AS count "
+                f"FROM {qualified} GROUP BY {col} ORDER BY COUNT(*) DESC"
+            )
+            with request_credentials(**_creds_from_ctx(ctx)):
+                res = await execute_query(sql, max_rows=limit)
+            metrics.set_rows(len(res.rows))
+
+            if not res.rows:
+                return f"No values found for {column} in {table}."
+            return format_json(res.columns, res.rows)
+
+        except Exception as e:
+            logger.exception("distinct_values failed")
+            return f"ERROR: {type(e).__name__}: {str(e)}"

@@ -133,6 +133,31 @@ Input: (none)
 Output: Connection status
 ```
 
+### 9. `get_relationships(table, schema)`
+List foreign-key relationships so an agent can build correct JOINs
+```
+Input: table="orders"  (optional; matches parent or referenced side)
+Output: JSON of parent table.column -> referenced table.column
+```
+
+### 10. `sample_table(table, limit=5)`
+Return a few example rows to reveal a table's data shape and typical values
+```
+Input: table="dbo.users", limit=5
+Output: JSON rows (limit capped at 100)
+```
+
+### 11. `distinct_values(table, column, limit=20)`
+Most frequent distinct values of a column, with counts — learn what to filter on
+```
+Input: table="dbo.orders", column="status"
+Output: JSON list of {value, count}, most frequent first (limit capped at 200)
+```
+
+The server also sends `instructions` to clients on connect, guiding agents to
+start with discovery (`describe_table`, `get_relationships`, `sample_table`,
+`distinct_values`) before querying.
+
 ## Security Features
 ✅ **Read-Only by Default**
 - Only SELECT queries allowed unless explicitly enabled
@@ -216,6 +241,40 @@ Because the connected login's own permissions govern access, connecting with a
 read-only login enforces read-only **at the database level**, regardless of
 `ENABLE_WRITES`. Conversely, allowing writes requires both `ENABLE_WRITES=true`
 and a login that has write permission.
+
+#### Per-request credentials (remote clients, HTTP transport)
+A remote client can authenticate as **its own** SQL login for the duration of a
+request by sending credentials as HTTP headers — no server reconfiguration, and
+it overrides the server's default identity just for that client. Set them in the
+MCP client config, e.g. `.mcp.json`:
+```json
+{
+  "mcpServers": {
+    "mssql-mcp": {
+      "type": "http",
+      "url": "http://your-host:8080/mcp",
+      "headers": {
+        "X-MSSQL-User": "your_login",
+        "X-MSSQL-Password": "your_password"
+      }
+    }
+  }
+}
+```
+Headers (all optional): `X-MSSQL-User`, `X-MSSQL-Password`,
+`X-MSSQL-Trusted-Connection` (`true`/`false`). When absent, the server's default
+credentials are used. Precedence: request headers → server `MSSQL_USER`/… →
+`UID`/`PWD` in `MSSQL_CONNECTION_STRING`.
+
+**Non-ASCII values:** HTTP header values must be Latin-1, so a value containing
+non-ASCII characters (e.g. an accented password) can't be sent raw. For those,
+send the base64 of the UTF-8 value in the `-B64` variant of the header, which
+takes precedence over the plain one:
+`X-MSSQL-User-B64`, `X-MSSQL-Password-B64`. Example (encode the value):
+`printf '%s' 'pÁsswŐrd' | base64`.
+
+> Security: credentials travel in headers, so use HTTPS (or a trusted network).
+> Access is still bounded by that login's own SQL Server permissions.
 
 ### Increase Query Timeout
 ```bash
