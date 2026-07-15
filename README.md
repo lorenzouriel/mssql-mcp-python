@@ -133,6 +133,31 @@ Input: (none)
 Output: Connection status
 ```
 
+### 9. `get_relationships(table, schema)`
+List foreign-key relationships so an agent can build correct JOINs
+```
+Input: table="orders"  (optional; matches parent or referenced side)
+Output: JSON of parent table.column -> referenced table.column
+```
+
+### 10. `sample_table(table, limit=5)`
+Return a few example rows to reveal a table's data shape and typical values
+```
+Input: table="dbo.users", limit=5
+Output: JSON rows (limit capped at 100)
+```
+
+### 11. `distinct_values(table, column, limit=20)`
+Most frequent distinct values of a column, with counts — learn what to filter on
+```
+Input: table="dbo.orders", column="status"
+Output: JSON list of {value, count}, most frequent first (limit capped at 200)
+```
+
+The server also sends `instructions` to clients on connect, guiding agents to
+start with discovery (`describe_table`, `get_relationships`, `sample_table`,
+`distinct_values`) before querying.
+
 ## Security Features
 ✅ **Read-Only by Default**
 - Only SELECT queries allowed unless explicitly enabled
