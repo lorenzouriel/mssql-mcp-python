@@ -8,13 +8,48 @@ Uses pyodbc with connection pooling and thread-safe execution via asyncio.to_thr
 import asyncio
 import logging
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import List, Tuple, Iterator, Optional, Any
+from typing import List, Tuple, Iterator, Optional, Any, Dict
 import pyodbc
 
 from .config import settings
 
 logger = logging.getLogger(__name__)
+
+# Per-request SQL credential override (set from MCP request headers). When set,
+# it takes precedence over the server's own MSSQL_USER/MSSQL_PASSWORD settings for
+# the duration of one request, letting a remote client authenticate as its own SQL
+# login. Copied into worker threads by asyncio.to_thread, so it reaches the sync
+# DB code. None means "use server defaults".
+_request_credentials: ContextVar[Optional[Dict[str, Any]]] = ContextVar(
+    "mssql_request_credentials", default=None
+)
+
+
+@contextmanager
+def request_credentials(user: Optional[str] = None, password: Optional[str] = None,
+                        trusted: Optional[bool] = None):
+    """Bind per-request SQL credentials for the enclosed call.
+
+    A no-op when all three are unset, so callers can wrap unconditionally.
+    """
+    if not user and not password and trusted is None:
+        yield
+        return
+    token = _request_credentials.set({"user": user, "password": password, "trusted": trusted})
+    try:
+        yield
+    finally:
+        _request_credentials.reset(token)
+
+
+def _effective_credentials() -> Tuple[Optional[str], Optional[str], Optional[bool]]:
+    """Return (user, password, trusted): per-request override if set, else settings."""
+    req = _request_credentials.get()
+    if req is not None:
+        return req.get("user"), req.get("password"), req.get("trusted")
+    return settings.MSSQL_USER, settings.MSSQL_PASSWORD, settings.MSSQL_TRUSTED_CONNECTION
 
 
 @dataclass
@@ -83,15 +118,15 @@ def _quote_odbc_value(value: str) -> str:
 def build_connection_string() -> str:
     """Build the effective connection string, applying optional credential overrides.
 
-    MSSQL_USER / MSSQL_PASSWORD (and MSSQL_TRUSTED_CONNECTION) take precedence over
-    UID/PWD embedded in MSSQL_CONNECTION_STRING, so a deployment can run under its
-    own SQL login without editing the base connection string. Only the credential
-    keys being overridden are replaced; everything else is preserved.
+    Credentials come from the per-request override if one is bound (see
+    request_credentials), otherwise from MSSQL_USER / MSSQL_PASSWORD /
+    MSSQL_TRUSTED_CONNECTION. They take precedence over UID/PWD embedded in
+    MSSQL_CONNECTION_STRING, so a deployment (or an individual remote client) can
+    run under its own SQL login without editing the base connection string. Only
+    the credential keys being overridden are replaced; everything else is preserved.
     """
     base = settings.MSSQL_CONNECTION_STRING
-    user = settings.MSSQL_USER
-    password = settings.MSSQL_PASSWORD
-    trusted = settings.MSSQL_TRUSTED_CONNECTION
+    user, password, trusted = _effective_credentials()
 
     # No overrides configured -> use the connection string as-is.
     if not user and not password and trusted is None:
