@@ -71,6 +71,7 @@ async def get_server_info() -> Dict[str, Any]:
         "log_level": settings.LOG_LEVEL,
         "max_rows_per_query": settings.MAX_ROWS_PER_QUERY,
         "query_timeout_seconds": settings.MSSQL_QUERY_TIMEOUT,
+        "lean_tools": settings.LEAN_TOOLS,
     }
 
 

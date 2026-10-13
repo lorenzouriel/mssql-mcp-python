@@ -57,6 +57,13 @@ class Settings(BaseSettings):
     ENABLE_HEALTH_CHECKS: bool = True
     ENABLE_SCHEMA_DISCOVERY: bool = True
 
+    # Lean tool surface. When true, only `execute_sql` is registered as a tool and
+    # the schema is offered as a pinned resource (schema://digest) instead of the
+    # discovery tools. This cuts the per-turn tool-schema tokens an agent pays
+    # (the discovery tools are all expressible as execute_sql SELECTs). Leave false
+    # for the full, convenient tool set. Useful for A/B token comparisons.
+    LEAN_TOOLS: bool = False
+
     # Server configuration
     MCP_TRANSPORT: str = "stdio"  # 'stdio' or 'http'
     HTTP_BIND_HOST: str = "127.0.0.1"

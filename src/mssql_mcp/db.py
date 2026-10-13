@@ -86,14 +86,28 @@ class ConnectionError(DatabaseError):
     pass
 
 
-def _fetch_rows(cursor, max_rows: int, batch_size: int = 1000) -> Tuple[List[Tuple[Any, ...]], bool]:
+def _fetch_rows(
+    cursor, max_rows: int, offset: int = 0, batch_size: int = 1000
+) -> Tuple[List[Tuple[Any, ...]], bool]:
     """Fetch up to max_rows rows from a cursor, reporting truncation.
 
-    Allows the row count to exceed max_rows before trimming so that a result
-    of exactly max_rows rows is not mislabelled as truncated.
+    Skips the first `offset` rows first (server-side pagination), then collects
+    up to max_rows. Allows the row count to exceed max_rows before trimming so
+    that a result of exactly max_rows rows is not mislabelled as truncated.
+
+    Note: without an ORDER BY the row order is not guaranteed stable between
+    runs, so paginating an unordered query may repeat or skip rows.
 
     Returns (rows, truncated).
     """
+    # Discard the first `offset` rows.
+    skipped = 0
+    while skipped < offset:
+        batch = cursor.fetchmany(min(batch_size, offset - skipped))
+        if not batch:
+            break
+        skipped += len(batch)
+
     rows: List[Tuple[Any, ...]] = []
     truncated = False
     while True:
@@ -212,6 +226,7 @@ async def execute_query(
     timeout: Optional[int] = None,
     max_rows: Optional[int] = None,
     database: Optional[str] = None,
+    offset: int = 0,
 ) -> QueryResult:
     """
     Execute a SQL statement asynchronously.
@@ -251,7 +266,7 @@ async def execute_query(
                 if columns:
                     # Fetch rows with batch processing for memory efficiency,
                     # flagging truncation when more than max_rows are available.
-                    rows, truncated = _fetch_rows(cursor, max_rows)
+                    rows, truncated = _fetch_rows(cursor, max_rows, offset=offset)
                     return QueryResult(columns=columns, rows=rows, truncated=truncated)
                 else:
                     # No result set: write statement (INSERT/UPDATE/DELETE) or USE.

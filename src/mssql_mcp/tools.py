@@ -97,24 +97,17 @@ def _get_transport_security():
         allowed_origins=allowed_origins,
     )
 
-# Guidance sent to MCP clients on initialize, so agents use the tools effectively.
-_INSTRUCTIONS = """\
-This server exposes a Microsoft SQL Server database.
-
-To find what you need efficiently:
-- Discover databases with `list_databases`, then explore any of them: the
-  discovery tools (`list_schemas`, `list_tables`, `describe_table`,
-  `schema_discovery`, `get_relationships`) all take a `database` argument to look
-  inside a specific database, not just the current one.
-- `describe_table` gives a table's columns, types, keys and descriptions;
-  `get_relationships` gives foreign keys (for JOINs); `sample_table` shows example
-  rows; `distinct_values` shows a column's typical values before you filter on it.
-- Run queries with `execute_sql`: format="json" gives a valid JSON envelope for
-  reliable field parsing; for large results prefer "table"/"csv" (more compact)
-  and control size with `max_rows`. Raise `timeout` for slow queries; pass
-  `database` to run in a specific database.
-
+# Guidance shared by both tool surfaces (full and lean).
+_CONVENTIONS = """\
 Conventions:
+- Prefer ONE query that does the work server-side (JOINs, WHERE, GROUP BY, and
+  CTEs via `WITH x AS (...), y AS (...) SELECT ...`) over many round-trips — only
+  the final result set comes back, so a single set-based query is far cheaper than
+  fetching rows and filtering them yourself.
+- Control output size with `max_rows` (set it as low as the task needs; there is a
+  server hard cap you cannot exceed) and page with `offset`. For big result sets
+  'csv'/'table' are much more compact than 'json' (json repeats column names per
+  row). 'json' is best when you must parse specific fields.
 - The default database follows the connected login (override per call with the
   `database` argument, or server-wide with DEFAULT_DATABASE).
 - Cross-database queries work in a SINGLE statement via fully-qualified names —
@@ -126,8 +119,62 @@ Conventions:
   write-enabled and a login with the right permissions.
 """
 
+_INSTRUCTIONS = """\
+This server exposes a Microsoft SQL Server database.
+
+Tool surface (chosen per connection): by default every tool is available. A
+client can request a LEAN surface — only `execute_sql` — by connecting to the MCP
+URL with a `?mode=lean` query parameter (e.g. .../mcp?mode=lean). In lean mode,
+read the pinned resource `schema://digest` for the accessible tables and columns
+and do any further discovery with plain SQL via `execute_sql`; this cuts the
+per-turn tool-schema tokens. (`?mode=full` forces the full surface.)
+
+Full surface — to find what you need efficiently:
+- Discover databases with `list_databases`, then explore any of them: the
+  discovery tools (`list_schemas`, `list_tables`, `describe_table`,
+  `schema_discovery`, `get_relationships`) all take a `database` argument to look
+  inside a specific database, not just the current one.
+- `describe_table` gives a table's columns, types, keys and descriptions;
+  `get_relationships` gives foreign keys (for JOINs); `sample_table` shows example
+  rows; `distinct_values` shows a column's typical values before you filter on it.
+- Run queries with `execute_sql`.
+
+""" + _CONVENTIONS
+
+# Tools advertised in the lean surface (?mode=lean). All tools stay registered and
+# callable; lean only filters what `list_tools` advertises, to cut context tokens.
+LEAN_TOOL_NAMES = {"execute_sql"}
+
+
+class ModeFastMCP(FastMCP):
+    """FastMCP that presents a lean or full tool surface per connection.
+
+    The surface is chosen by the connection's `?mode=` query parameter
+    (`lean` → only LEAN_TOOL_NAMES, `full` → everything), falling back to the
+    LEAN_TOOLS setting when no parameter is given. The MCP SDK attaches the
+    Starlette request to each JSON-RPC message, so the query parameter is readable
+    here for streamable-HTTP connections; stdio connections use the default.
+    """
+
+    def _connection_is_lean(self) -> bool:
+        try:
+            request = self._mcp_server.request_context.request
+            mode = request.query_params.get("mode")
+        except Exception:
+            mode = None
+        if mode:
+            return mode.strip().lower() == "lean"
+        return settings.LEAN_TOOLS
+
+    async def list_tools(self):
+        tools = await super().list_tools()
+        if self._connection_is_lean():
+            tools = [t for t in tools if t.name in LEAN_TOOL_NAMES]
+        return tools
+
+
 # Create MCP server instance with transport security
-mcp = FastMCP(
+mcp = ModeFastMCP(
     "mssql-mcp",
     instructions=_INSTRUCTIONS,
     transport_security=_get_transport_security(),
@@ -141,6 +188,7 @@ async def execute_sql(
     timeout: Optional[int] = None,
     max_rows: Optional[int] = None,
     database: Optional[str] = None,
+    offset: int = 0,
     ctx: Optional[Context] = None,
 ) -> str:
     """
@@ -162,12 +210,16 @@ async def execute_sql(
         timeout: Per-query timeout in seconds. Overrides the server default
             (MSSQL_QUERY_TIMEOUT) for this call only — raise it for slow,
             complex queries such as large JOINs or CROSS APPLY.
-        max_rows: Maximum rows to return for this call. Overrides the server
-            default (MAX_ROWS_PER_QUERY). The output flags when results are
-            truncated.
+        max_rows: Maximum rows to return for this call. Set it as low as the task
+            needs to keep output small. There is a server hard cap
+            (MAX_ROWS_PER_QUERY); a larger value is clamped down to it (never up).
+            Defaults to the cap. The output flags when results are truncated.
         database: Run in this database (initial catalog) so unqualified names
             resolve there. Cross-database queries also work without it via
             fully-qualified names, e.g. [OtherDb].schema.table, including JOINs.
+        offset: Skip this many leading rows before returning (server-side
+            pagination). Combine with max_rows to page through a large result.
+            Add an ORDER BY for stable paging, or the row order may vary per call.
 
     Returns:
         For 'json': a JSON object {columns, row_count, truncated, rows}. For
@@ -185,11 +237,25 @@ async def execute_sql(
         record_query_blocked(reason or "unknown")
         return f"ERROR: Query not allowed - {reason}"
 
+    # Enforce the hard row cap: a caller may lower max_rows, never raise it above
+    # the server ceiling. None means "use the ceiling".
+    cap = settings.MAX_ROWS_PER_QUERY
+    effective_max_rows = cap if max_rows is None else min(max_rows, cap)
+    capped = max_rows is not None and max_rows > cap
+    if offset < 0:
+        offset = 0
+
     # Execute query with metrics tracking
     with MetricsContext(tool_name) as metrics:
         try:
             with request_credentials(**_creds_from_ctx(ctx)):
-                res = await execute_query(sql, timeout=timeout, max_rows=max_rows, database=database)
+                res = await execute_query(
+                    sql,
+                    timeout=timeout,
+                    max_rows=effective_max_rows,
+                    database=database,
+                    offset=offset,
+                )
             metrics.set_rows(len(res.rows))
 
             # Write statement / no result set: report affected rows.
@@ -209,6 +275,10 @@ async def execute_sql(
                     "truncated": res.truncated,
                     "rows": rows_to_dicts(res.columns, res.rows),
                 }
+                if offset:
+                    envelope["offset"] = offset
+                if capped:
+                    envelope["max_rows_capped_at"] = cap
                 return _json.dumps(envelope, indent=2, default=str)
 
             # Human-readable formats: render, then append a summary line that
@@ -220,13 +290,51 @@ async def execute_sql(
                 result = format_table(res.columns, res.rows)
 
             summary = result_summary(res.columns, res.rows)
+            if offset:
+                summary += f", offset {offset}"
             if res.truncated:
-                summary += " — TRUNCATED (more rows available; raise max_rows to see them)"
+                summary += " — TRUNCATED (more rows available; raise max_rows or page with offset)"
+            if capped:
+                summary += f" — max_rows capped at server limit {cap}"
             return f"{result}\n\n[{summary}]"
 
         except Exception as e:
             logger.exception("Query execution failed")
             return f"ERROR: {type(e).__name__}: {str(e)}"
+
+
+@mcp.resource("schema://digest")
+async def schema_digest() -> str:
+    """Compact digest of the accessible tables and columns.
+
+    A "pinned" schema resource: a client can load it once so the agent knows the
+    tables and columns without spending tool calls to rediscover them (query the
+    data itself with execute_sql). Reflects the server's default login/database.
+    """
+    sql = (
+        "SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE "
+        "FROM INFORMATION_SCHEMA.COLUMNS "
+        "ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION"
+    )
+    try:
+        res = await execute_schema_query(sql)
+    except Exception as e:  # keep the resource readable even if the DB is down
+        return f"# schema digest unavailable: {type(e).__name__}: {e}"
+
+    from collections import OrderedDict
+    tables: "OrderedDict[str, list]" = OrderedDict()
+    for row in res.rows:
+        schema, table, col, dtype = row[0], row[1], row[2], row[3]
+        tables.setdefault(f"{schema}.{table}", []).append(f"{col} {dtype}")
+
+    header = (
+        f"# Schema digest — {len(tables)} table(s). "
+        "Columns only; query data with execute_sql."
+    )
+    if res.truncated:
+        header += " (truncated — schema larger than the fetch limit)"
+    lines = [header] + [f"{name}: {', '.join(cols)}" for name, cols in tables.items()]
+    return "\n".join(lines)
 
 
 @mcp.tool()
